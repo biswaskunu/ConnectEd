@@ -1,4 +1,3 @@
--- user table
 CREATE TYPE user_role AS ENUM ('trainee', 'trainer', 'admin');
 
 CREATE TABLE users (

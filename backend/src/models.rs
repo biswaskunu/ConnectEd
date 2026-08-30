@@ -1,6 +1,5 @@
 use axum::{
-    extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -11,6 +10,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "user_role", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     Trainee,
     Trainer,
@@ -30,7 +30,6 @@ pub struct AuthenticatedUser {
     pub id: Uuid,
     pub role: Role,
 }
-
 
 // AppError
 pub enum AppError {
@@ -60,6 +59,62 @@ impl IntoResponse for AppError {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    /// Ignored (forced to Admin) for the very first user in the table.
+    /// Rejected with 422 if a non-bootstrap request tries to self-select Admin.
+    pub role: Role,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub role: Role,
+    pub approved: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenPairResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct UserRow {
+    pub id: Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub role: Role,
+    pub approved: bool,
+}
+
+impl From<UserRow> for UserResponse {
+    fn from(row: UserRow) -> Self {
+        UserResponse {
+            id: row.id,
+            email: row.email,
+            role: row.role,
+            approved: row.approved,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // NOTE: FromRequestParts for AuthenticatedUser (JWT decode / validation)
-// still needs to be implemented in middleware.rs — this file only owns
-// the data shapes, per ARCHITECTURE.md's models.rs scope.
+// is implemented in middleware.rs — this file only owns the data shapes,
+// per ARCHITECTURE.md's models.rs scope.
+// ---------------------------------------------------------------------

@@ -13,12 +13,8 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 
 use crate::models::{AppError, AuthenticatedUser, Claims, Role};
 
-// ---------------------------------------------------------------------
-// AuthenticatedUser extractor — decodes + validates the access JWT.
-// This is the single source of truth for "is this request authenticated".
-// RequireRole<R> below composes this rather than duplicating the decode.
-// ---------------------------------------------------------------------
 
+#[axum::async_trait]
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -55,12 +51,6 @@ where
     }
 }
 
-// ---------------------------------------------------------------------
-// RequireRole<R> — single definition (the PhantomData/marker-trait
-// version). The const-generic variant that previously lived in
-// models.rs has been removed; it conflicted with this one and would
-// not compile (Role does not derive the traits const generics need).
-// ---------------------------------------------------------------------
 
 pub trait RoleMarker {
     const ROLE: Role;
@@ -86,6 +76,7 @@ pub struct RequireRole<R: RoleMarker> {
     _marker: PhantomData<R>,
 }
 
+#[axum::async_trait]
 impl<S, R: RoleMarker> FromRequestParts<S> for RequireRole<R>
 where
     S: Send + Sync,
