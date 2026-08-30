@@ -1,53 +1,56 @@
-use axum::{
-    async_trait,
-    extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
-};
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use uuid::Uuid;
-use crate::models::Claims;
-
-pub struct AuthenticatedUser {
-    pub user_id: Uuid,
+pub struct RequireRole<R: RoleMarker> {
+    pub user: AuthenticatedUser,
+    _marker: PhantomData<R>,
+}
+pub trait RoleMarker {
+    const ROLE: Role;
+}
+// single role handler
+async fn approve_user(
+    RequireRole::<Admin> { user, .. }: RequireRole<Admin>,
+    State(pool): State<PgPool>,
+    Path(target_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query!("UPDATE users SET approved = true WHERE id = $1", target_id)
+        .execute(&pool)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::OK)
+}
+// multi role handler
+async fn tag_course(
+    user: AuthenticatedUser,
+    State(pool): State<PgPool>,
+    Path(course_id): Path<Uuid>,
+    Json(body): Json<TagCourseRequest>,
+) -> Result<StatusCode, AppError> {
+    if !matches!(user.role, Role::Trainer | Role::Admin) {
+        return Err(AppError::Forbidden);
+    }
+    // ... proceed
 }
 
-#[async_trait]
-impl<S> FromRequestParts<S> for AuthenticatedUser
+
+
+
+pub struct Admin;
+impl RoleMarker for Admin {
+    const ROLE: Role = Role::Admin;
+}
+// same for Trainer, Trainee
+
+impl<S, R: RoleMarker> FromRequestParts<S> for RequireRole<R>
 where
+    AuthenticatedUser: FromRequestParts<S>,
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, String);
+    type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let auth_header = parts
-            .headers
-            .get("Authorization")
-            .and_then(|value| value.to_str().ok())
-            .ok_or((StatusCode::UNAUTHORIZED, "Missing Authorization Header".to_string()))?;
-
-        if !auth_header.starts_with("Bearer ") {
-            return Err((StatusCode::UNAUTHORIZED, "Invalid token format".to_string()));
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let user = AuthenticatedUser::from_request_parts(parts, state).await?;
+        if user.role != R::ROLE {
+            return Err(AppError::Forbidden);
         }
-        let token = &auth_header[7..];
-
-
-        let jwt_secret = std::env::var("JWT_SECRET")
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Server misconfiguration".to_string()))?;
-
-        let token_data = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "Invalid or expired token".to_string()))?;
-    
-        // Ensure the token type is "access" and not "refresh"
-        if token_data.claims.token_type != "access" {
-            return Err((StatusCode::UNAUTHORIZED, "Wrong token type".to_string()));
-        }
-
-        Ok(AuthenticatedUser {
-            user_id: token_data.claims.sub,
-        })
+        Ok(RequireRole { user, _marker: PhantomData })
     }
 }

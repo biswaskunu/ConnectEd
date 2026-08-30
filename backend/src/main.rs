@@ -23,7 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     let pool = PgPoolOptions::new()
@@ -34,44 +33,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let app = Router::new()
-        // Auth / User Routes
+        // Public, no auth
         .route("/auth/register", post(handlers::auth::register))
         .route("/auth/login", post(handlers::auth::login))
+        .route("/auth/refresh", post(handlers::auth::refresh))
+
+        // Any authenticated user, no role restriction
         .route("/auth/logout", post(handlers::auth::logout))
-        .route("/auth/refresh", post(handlers::auth::refresh_token))
-        // Sessions Section
-        .route("/sessions", get(handlers::auth::get_sessions))
-        .route("/sessions/:id", delete(handlers::auth::revoke_session)) 
-        .route("/users/me", get(handlers::auth::get_profile)
-                        .patch(handlers::auth::update_profile))
+        .route("/users/me", get(handlers::auth::get_me).patch(handlers::auth::update_me))
 
-        // Organization Routes
-        .route("/organizations", post(handlers::org::create_organization)
-            .get(handlers::org::list_organizations))
-        .route("/organizations/:org_id", get(handlers::org::get_organization)
-            .patch(handlers::org::update_organization))
-        .route("/organizations/:org_id/users", post(handlers::org::create_user_in_org))
-        .route("/organizations/:org_id/memberships", post(handlers::org::add_org_member))
-        .route("/memberships/:id/roles", post(handlers::org::assign_role_to_membership))
+        // Trainer-only — role visible in extractor, no body check needed
+        .route("/courses", post(handlers::trainer::create_course))
+        .route("/courses/:id/questionnaires", post(handlers::trainer::create_questionnaire))
+        .route("/library", post(handlers::trainer::upload_library_content))
 
-        // Permissions CRUD Routes
-        .route("/permissions", post(handlers::rbac::create_permission).get(handlers::rbac::list_permissions))
-        
-        // Roles CRUD Routes ( Chained GET now processes the new Filters )
-        .route("/roles", post(handlers::rbac::create_role).get(handlers::rbac::list_roles))
-        .route("/roles/:id", patch(handlers::rbac::update_role).delete(handlers::rbac::delete_role))
-        .route("/roles/:id/permissions", post(handlers::rbac::assign_permission_to_role))
-        
-        // API Keys Management Routes
-        .route("/api-keys", post(handlers::api_key::create_api_key).get(handlers::api_key::list_api_keys))
-        .route("/api-keys/:id", delete(handlers::api_key::delete_api_key))
-        
+        // Trainee-only
+        .route("/courses/:id/enroll", post(handlers::trainee::enroll))
+        .route("/questionnaires/:id/submit", post(handlers::trainee::submit_questionnaire))
+        .route("/courses/:id/feedback", post(handlers::trainee::submit_feedback))
 
-        .layer(TraceLayer::new_for_http())
-        .with_state(pool);
+        // Admin-only
+        .route("/admin/users/pending", get(handlers::admin::list_pending))
+        .route("/admin/users/:id/approve", post(handlers::admin::approve_user))
+        .route("/admin/users/:id/role", patch(handlers::admin::change_role))
+        .route("/admin/dashboard", get(handlers::admin::dashboard))
+        .route("/competency-tags", post(handlers::admin::create_tag))
+
+        // Multi-role (Trainer OR Admin) — plain AuthenticatedUser + inline check,
+        .route("/courses/:id/enrollments", get(handlers::courses::list_enrollments))
+        .route("/questionnaires/:id/results", get(handlers::trainer::view_results))
+        .route("/courses/:id/tags", post(handlers::competency::tag_course))
+        .route("/courses/:id/suggested-trainers", get(handlers::competency::suggested_trainers))
+
+        .with_state(app_state);
     
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    println!("🚀 IAM Gateway running on http://127.0.0.1:3000");
+    println!("backend Gateway running on http://127.0.0.1:3000");
     axum::serve(listener, app).await?;
 
     Ok(())
